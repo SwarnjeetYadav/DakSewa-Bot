@@ -200,7 +200,14 @@ async function findCaptchaInput(page) {
 }
 
 async function readResponse(page) {
-  const body = normalizeText(await page.locator("body").innerText().catch(() => ""));
+  // The tracking widget may be rendered inside an iframe. Read all frame
+  // bodies so we do not classify only the outer SPA shell or homepage.
+  const frameBodies = [];
+  for (const frame of page.frames()) {
+    const frameBody = normalizeText(await frame.locator("body").innerText().catch(() => ""));
+    if (frameBody) frameBodies.push(frameBody);
+  }
+  const body = normalizeText([...new Set(frameBodies)].join("\n"));
   return {
     body,
     captchaWrong: /invalid\s*captcha|incorrect\s*captcha|captcha\s*(is\s*)?wrong|enter\s*valid\s*captcha|captcha\s*does\s*not\s*match/i.test(body),
@@ -233,7 +240,8 @@ function extractField(text, labels) {
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     for (const label of labels) {
-      const pattern = new RegExp("^" + label + "\s*[:：]?\s*(.*)$", "i");
+      const escapedLabel = label.replace(/[.*+?^$\{\}()|[\]\\]/g, "\\      const pattern = new RegExp("^" + label + "\s*[:：]?\s*(.*)$", "i");");
+      const pattern = new RegExp("^" + escapedLabel + "\\s*[:：]?\\s*(.*)$", "i");
       const match = line.match(pattern);
       if (match && match[1].trim()) return match[1].trim();
       if (match && lines[i + 1] && !/^(article|consignment|booked|booking|origin|destination|delivery|status|print report)/i.test(lines[i + 1])) {
@@ -306,19 +314,23 @@ async function captureResult(page, consignmentNumber, body) {
     "table", '[role="table"]', ".table-responsive",
   ];
   const candidates = [];
-  for (const selector of selectors) {
-    try {
-      const locators = page.locator(selector);
-      const count = Math.min(await locators.count(), 12);
-      for (let i = 0; i < count; i++) {
-        const node = locators.nth(i);
-        if (!(await node.isVisible().catch(() => false))) continue;
-        const text = normalizeText(await node.innerText().catch(() => ""));
-        if (text.length > 30 && text.toLowerCase().includes(consignmentNumber.toLowerCase())) {
-          candidates.push(text);
+  // Search every frame, matching the same frame-aware behavior used when
+  // locating the CAPTCHA and Search control.
+  for (const frame of page.frames()) {
+    for (const selector of selectors) {
+      try {
+        const locators = frame.locator(selector);
+        const count = Math.min(await locators.count(), 12);
+        for (let i = 0; i < count; i++) {
+          const node = locators.nth(i);
+          if (!(await node.isVisible().catch(() => false))) continue;
+          const text = normalizeText(await node.innerText().catch(() => ""));
+          if (text.length > 30 && text.toLowerCase().includes(consignmentNumber.toLowerCase())) {
+            candidates.push(text);
+          }
         }
-      }
-    } catch {}
+      } catch {}
+    }
   }
   // Prefer the smallest matching block that contains both result fields and
   // a status term. A tiny block containing only the consignment number is not
