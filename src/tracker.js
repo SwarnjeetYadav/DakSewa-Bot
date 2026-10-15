@@ -209,39 +209,131 @@ async function readResponse(page) {
   };
 }
 
-function looksLikeTrackingResult(body) {
-  const trackingFields = /booking date|delivery date|tracking details|tracking history|article number|consignment number/i.test(body);
-  const hasTrackingStatus = /item delivered|out for delivery|item received|item dispatched|bag received|bag dispatched|return to sender|in transit|item booked/i.test(body);
-  return trackingFields && hasTrackingStatus;
+function looksLikeTrackingResult(body, consignmentNumber, url = "") {
+  const text = normalizeText(body);
+  const number = String(consignmentNumber || "").trim();
+  if (!number || !text.toLowerCase().includes(number.toLowerCase())) return false;
+
+  // India Post's current SPA exposes result pages under this route. Do not
+  // accept homepage announcements or generic words such as "Delivered".
+  const resultRoute = /\\/track-result\\/article-tracking\\//i.test(url);
+  const hasResultFields =
+    /article number|consignment (?:no\\.?|number)|booked at|booked on|booking date|destination pincode|origin pincode/i.test(text);
+  const hasStatusField =
+    /(?:current status|article status|tracking status|status)\\s*[:\\-]?\\s*(?:delivered|out for delivery|in transit|dispatched|booked|received|returned|return to sender)/i.test(text);
+  const hasEventRows =
+    /(?:\\b(?:booked|dispatched|in transit|out for delivery|delivered|item received|bag received|return to sender)\\b.{0,100}(?:\\d{1,2}[\\/-][A-Za-z0-9\\/-]+|\\d{4}|office|pincode|delivery))/i.test(text);
+  return resultRoute && hasResultFields && (hasStatusField || hasEventRows);
+}
+
+function extractField(text, labels) {
+  const lines = normalizeText(text).split(/\\r?\\n/).map((line) => line.trim()).filter(Boolean);
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    for (const label of labels) {
+      const pattern = new RegExp("^" + label + "\\s*[:：]?\\s*(.*)$", "i");
+      const match = line.match(pattern);
+      if (match && match[1].trim()) return match[1].trim();
+      if (match && lines[i + 1] && !/^(article|consignment|booked|booking|origin|destination|delivery|status|print report)/i.test(lines[i + 1])) {
+        return lines[i + 1];
+      }
+    }
+  }
+  return null;
+}
+
+function extractTrackingDetails(detail, body, consignmentNumber) {
+  const source = normalizeText(detail);
+  const full = normalizeText(body);
+  const statusLabels = [
+    ["Delivered", /\\bdelivered\\b/i],
+    ["Out for Delivery", /\\bout for delivery\\b/i],
+    ["In Transit", /\\bin transit\\b/i],
+    ["Dispatched", /\\b(?:item|article|bag) dispatched\\b/i],
+    ["Booked", /\\b(?:item|article) booked\\b/i],
+    ["Returned to Sender", /\\breturn(?:ed)? to sender\\b/i],
+    ["Received", /\\b(?:item|article|bag) received\\b/i],
+  ];
+  // Status must come from the result detail, not the site's shared header,
+  // homepage carousel, or announcements.
+  let currentStatus = extractField(source, ["Current Status", "Article Status", "Tracking Status", "Status"]);
+  if (!currentStatus) {
+    const eventLines = source.split(/\\r?\\n/).map((line) => line.trim()).filter(Boolean);
+    const event = eventLines.find((line) =>
+      /\\b(?:delivered|out for delivery|in transit|item dispatched|article dispatched|bag dispatched|item booked|article booked|item received|article received|bag received|return to sender)\\b/i.test(line)
+    );
+    if (event) {
+      const match = statusLabels.find(([, regex]) => regex.test(event));
+      if (match) currentStatus = match[0];
+    }
+  }
+  const deliveryDate = extractField(source, ["Delivered On", "Delivery Date", "Delivery Date/Time", "Delivery Date & Time"]);
+  return {
+    consignmentNumber: extractField(source, ["Article Number", "Consignment Number", "Consignment No"]) || (source.toLowerCase().includes(consignmentNumber.toLowerCase()) ? consignmentNumber : null),
+    bookingOffice: extractField(source, ["Booked At", "Booking Office", "Booked From", "Origin Office"]),
+    bookingDate: extractField(source, ["Booked On", "Booking Date", "Booking Date/Time"]),
+    destination: extractField(source, ["Destination"]),
+    destinationPincode: extractField(source, ["Destination Pincode", "Destination PIN Code"]),
+    currentStatus,
+    deliveryDate,
+  };
+}
+
+async function waitForTrackingResult(page, consignmentNumber, timeoutMs = 20000) {
+  const deadline = Date.now() + timeoutMs;
+  let latest = { body: "", captchaWrong: false, notFound: false, expired: false };
+  while (Date.now() < deadline) {
+    latest = await readResponse(page);
+    if (latest.captchaWrong || latest.notFound || latest.expired) return latest;
+    if (looksLikeTrackingResult(latest.body, consignmentNumber, page.url())) return latest;
+    await page.waitForTimeout(350);
+  }
+  return latest;
 }
 
 async function captureResult(page, consignmentNumber, body) {
-  if (!looksLikeTrackingResult(body, consignmentNumber)) return null;
+  if (!looksLikeTrackingResult(body, consignmentNumber, page.url())) return null;
+
+  // Prefer the smallest visible result container that contains the submitted
+  // consignment number; never derive status from the whole page shell.
   let detail = "";
-  for (const selector of ["table", '[role="table"]', ".table-responsive", '[class*="track" i]', '[id*="track" i]', '[class*="result" i]', '[id*="result" i]']) {
+  const selectors = [
+    '[class*="track-result" i]', '[id*="track-result" i]',
+    '[class*="tracking-result" i]', '[id*="tracking-result" i]',
+    '[class*="result" i]', '[id*="result" i]',
+    "table", '[role="table"]', ".table-responsive",
+  ];
+  const candidates = [];
+  for (const selector of selectors) {
     try {
       const locators = page.locator(selector);
-      const count = Math.min(await locators.count(), 8);
-      const blocks = [];
+      const count = Math.min(await locators.count(), 12);
       for (let i = 0; i < count; i++) {
         const node = locators.nth(i);
-        if (await node.isVisible().catch(() => false)) {
-          const text = normalizeText(await node.innerText().catch(() => ""));
-          if (text.length > 25) blocks.push(text);
+        if (!(await node.isVisible().catch(() => false))) continue;
+        const text = normalizeText(await node.innerText().catch(() => ""));
+        if (text.length > 30 && text.toLowerCase().includes(consignmentNumber.toLowerCase())) {
+          candidates.push(text);
         }
-      }
-      if (blocks.length) {
-        detail = [...new Set(blocks)].sort((a, b) => b.length - a.length)[0];
-        if (detail.length > 120) break;
       }
     } catch {}
   }
+  // Prefer the shortest matching result block to avoid shared navigation and
+  // homepage announcements; fall back to body only if it is itself verified.
+  if (candidates.length) detail = candidates.sort((a, b) => a.length - b.length)[0];
   if (!detail) detail = body;
-  const statusHints = ["Item Delivered", "Out for Delivery", "Item Received", "Item Dispatched", "Bag Received", "Bag Dispatched", "Return to Sender", "In Transit", "Item Booked"];
-  const lower = body.toLowerCase();
-  const matches = statusHints.filter((status) => lower.includes(status.toLowerCase()));
-  // Preserve a visual copy of the actual result page for the user.
-  // Generate both artifacts before the tracking browser context is closed.
+  const fields = extractTrackingDetails(detail, body, consignmentNumber);
+  if (!fields.consignmentNumber || fields.consignmentNumber.toLowerCase() !== consignmentNumber.toLowerCase() || !fields.currentStatus) {
+    console.warn("India Post result failed field verification:", {
+      url: page.url(),
+      expectedConsignment: consignmentNumber,
+      extractedConsignment: fields.consignmentNumber,
+      extractedStatus: fields.currentStatus,
+      detail: detail.slice(0, 1000),
+    });
+    return null;
+  }
+
   let screenshot = null;
   let reportPdf = null;
   try {
@@ -250,6 +342,7 @@ async function captureResult(page, consignmentNumber, body) {
     console.warn("Could not capture India Post result screenshot:", error.message);
   }
   try {
+    // Use the page's print layout only after the actual result has been verified.
     reportPdf = Buffer.from(await page.pdf({
       format: "A4",
       printBackground: true,
@@ -260,11 +353,21 @@ async function captureResult(page, consignmentNumber, body) {
     console.warn("Could not generate India Post tracking PDF:", error.message);
   }
 
+  const rows = [
+    ["Consignment Number", fields.consignmentNumber],
+    ["Current Status", fields.currentStatus],
+    ["Booking Office", fields.bookingOffice],
+    ["Booking Date", fields.bookingDate],
+    ["Destination", fields.destination],
+    ["Destination PIN Code", fields.destinationPincode],
+    ["Delivery Date", fields.deliveryDate],
+  ].filter(([, value]) => value);
+  const summary = rows.map(([label, value]) => `<b>${escapeHtml(label)}:</b> ${escapeHtml(value)}`).join("\\n");
   return {
     kind: "complete",
     screenshot,
     reportPdf,
-    message: `<b>📦 DakSewa Tracking Update</b>\n\n<b>Consignment:</b> <code>${escapeHtml(consignmentNumber)}</code>\n<b>Detected status keywords:</b> ${escapeHtml(matches.join(" • "))}\n\n<b>Details from India Post:</b>\n<pre>${escapeHtml(detail.slice(0, 3500))}</pre>\n\n<a href="https://www.indiapost.gov.in/">Open India Post official website</a>\n\n<i>Attached screenshot and PDF are captured from the page at the time of this check. Verify the latest status on the official site.</i>`,
+    message: `<b>📦 DakSewa Tracking Update</b>\\n\\n${summary}\\n\\n<i>Details are taken from the verified India Post result page. Fields not shown by the portal are omitted.</i>\\n\\n<a href="https://www.indiapost.gov.in/">Open India Post official website</a>\\n\\n<i>The attached screenshot and PDF reflect this check; verify the official site for the latest status.</i>`,
   };
 }
 
@@ -398,9 +501,10 @@ export async function submitCaptcha(chatId, captchaText, { onCaptcha }) {
     throw new Error("Could not find the Search control. Diagnostic details were written to the bot terminal.");
   }
 
-  await session.page.waitForTimeout(1200);
+  // India Post is a client-rendered SPA; wait for the result route and
+  // matching consignment details instead of assuming 1.2 seconds is enough.
   await session.page.waitForLoadState("domcontentloaded", { timeout: 4000 }).catch(() => {});
-  const response = await readResponse(session.page);
+  const response = await waitForTrackingResult(session.page, session.consignmentNumber, Math.min(TIMEOUT_MS, 20000));
   if (response.expired) {
     await cancelTracking(chatId);
     return { kind: "expired" };
