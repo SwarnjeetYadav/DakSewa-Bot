@@ -176,7 +176,7 @@ async function screenshotCaptcha(page) {
   }).catch(() => null);
 
   if (source?.src?.startsWith("data:image/") && source.naturalWidth >= 70 && source.naturalHeight >= 18) {
-    const match = source.src.match(/^data:image\\/[a-zA-Z0-9.+-]+;base64,([a-zA-Z0-9+/=]+)$/);
+    const match = source.src.match(/^data:image\/[a-zA-Z0-9.+-]+;base64,([a-zA-Z0-9+/=]+)$/);
     if (match) {
       const original = Buffer.from(match[1], "base64");
       if (original.length >= 500) return original;
