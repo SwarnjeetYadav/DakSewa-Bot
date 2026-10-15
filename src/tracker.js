@@ -324,8 +324,8 @@ async function captureResult(page, consignmentNumber, body) {
   // a status term. A tiny block containing only the consignment number is not
   // enough evidence to classify the parcel.
   const verifiedCandidates = candidates.filter((candidate) =>
-    /article number|consignment (?:no\\.?|number)|booked at|booked on|booking date|destination pincode|origin pincode/i.test(candidate) &&
-    /\\b(?:delivered|out for delivery|in transit|item dispatched|article dispatched|bag dispatched|item booked|article booked|item received|article received|bag received|return to sender)\\b/i.test(candidate)
+    /article number|consignment (?:no\.?|number)|booked at|booked on|booking date|destination pincode|origin pincode/i.test(candidate) &&
+    /\b(?:delivered|out for delivery|in transit|item dispatched|article dispatched|bag dispatched|item booked|article booked|item received|article received|bag received|return to sender)\b/i.test(candidate)
   );
   if (verifiedCandidates.length) detail = verifiedCandidates.sort((a, b) => a.length - b.length)[0];
   else detail = body;
