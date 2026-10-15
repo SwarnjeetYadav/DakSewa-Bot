@@ -216,22 +216,22 @@ function looksLikeTrackingResult(body, consignmentNumber, url = "") {
 
   // India Post's current SPA exposes result pages under this route. Do not
   // accept homepage announcements or generic words such as "Delivered".
-  const resultRoute = /\\/track-result\\/article-tracking\\//i.test(url);
+  const resultRoute = /\/track-result\/article-tracking\//i.test(url);
   const hasResultFields =
-    /article number|consignment (?:no\\.?|number)|booked at|booked on|booking date|destination pincode|origin pincode/i.test(text);
+    /article number|consignment (?:no\.?|number)|booked at|booked on|booking date|destination pincode|origin pincode/i.test(text);
   const hasStatusField =
-    /(?:current status|article status|tracking status|status)\\s*[:\\-]?\\s*(?:delivered|out for delivery|in transit|dispatched|booked|received|returned|return to sender)/i.test(text);
+    /(?:current status|article status|tracking status|status)\s*[:\-]?\s*(?:delivered|out for delivery|in transit|dispatched|booked|received|returned|return to sender)/i.test(text);
   const hasEventRows =
-    /(?:\\b(?:booked|dispatched|in transit|out for delivery|delivered|item received|bag received|return to sender)\\b.{0,100}(?:\\d{1,2}[\\/-][A-Za-z0-9\\/-]+|\\d{4}|office|pincode|delivery))/i.test(text);
+    /(?:\b(?:booked|dispatched|in transit|out for delivery|delivered|item received|bag received|return to sender)\b.{0,100}(?:\d{1,2}[\/-][A-Za-z0-9\/-]+|\d{4}|office|pincode|delivery))/i.test(text);
   return resultRoute && hasResultFields && (hasStatusField || hasEventRows);
 }
 
 function extractField(text, labels) {
-  const lines = normalizeText(text).split(/\\r?\\n/).map((line) => line.trim()).filter(Boolean);
+  const lines = normalizeText(text).split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     for (const label of labels) {
-      const pattern = new RegExp("^" + label + "\\s*[:：]?\\s*(.*)$", "i");
+      const pattern = new RegExp("^" + label + "\s*[:：]?\s*(.*)$", "i");
       const match = line.match(pattern);
       if (match && match[1].trim()) return match[1].trim();
       if (match && lines[i + 1] && !/^(article|consignment|booked|booking|origin|destination|delivery|status|print report)/i.test(lines[i + 1])) {
@@ -246,21 +246,21 @@ function extractTrackingDetails(detail, body, consignmentNumber) {
   const source = normalizeText(detail);
   const full = normalizeText(body);
   const statusLabels = [
-    ["Delivered", /\\bdelivered\\b/i],
-    ["Out for Delivery", /\\bout for delivery\\b/i],
-    ["In Transit", /\\bin transit\\b/i],
-    ["Dispatched", /\\b(?:item|article|bag) dispatched\\b/i],
-    ["Booked", /\\b(?:item|article) booked\\b/i],
-    ["Returned to Sender", /\\breturn(?:ed)? to sender\\b/i],
-    ["Received", /\\b(?:item|article|bag) received\\b/i],
+    ["Delivered", /\bdelivered\b/i],
+    ["Out for Delivery", /\bout for delivery\b/i],
+    ["In Transit", /\bin transit\b/i],
+    ["Dispatched", /\b(?:item|article|bag) dispatched\b/i],
+    ["Booked", /\b(?:item|article) booked\b/i],
+    ["Returned to Sender", /\breturn(?:ed)? to sender\b/i],
+    ["Received", /\b(?:item|article|bag) received\b/i],
   ];
   // Status must come from the result detail, not the site's shared header,
   // homepage carousel, or announcements.
   let currentStatus = extractField(source, ["Current Status", "Article Status", "Tracking Status", "Status"]);
   if (!currentStatus) {
-    const eventLines = source.split(/\\r?\\n/).map((line) => line.trim()).filter(Boolean);
+    const eventLines = source.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
     const event = eventLines.find((line) =>
-      /\\b(?:delivered|out for delivery|in transit|item dispatched|article dispatched|bag dispatched|item booked|article booked|item received|article received|bag received|return to sender)\\b/i.test(line)
+      /\b(?:delivered|out for delivery|in transit|item dispatched|article dispatched|bag dispatched|item booked|article booked|item received|article received|bag received|return to sender)\b/i.test(line)
     );
     if (event) {
       const match = statusLabels.find(([, regex]) => regex.test(event));
@@ -362,12 +362,12 @@ async function captureResult(page, consignmentNumber, body) {
     ["Destination PIN Code", fields.destinationPincode],
     ["Delivery Date", fields.deliveryDate],
   ].filter(([, value]) => value);
-  const summary = rows.map(([label, value]) => `<b>${escapeHtml(label)}:</b> ${escapeHtml(value)}`).join("\\n");
+  const summary = rows.map(([label, value]) => `<b>${escapeHtml(label)}:</b> ${escapeHtml(value)}`).join("\n");
   return {
     kind: "complete",
     screenshot,
     reportPdf,
-    message: `<b>📦 DakSewa Tracking Update</b>\\n\\n${summary}\\n\\n<i>Details are taken from the verified India Post result page. Fields not shown by the portal are omitted.</i>\\n\\n<a href="https://www.indiapost.gov.in/">Open India Post official website</a>\\n\\n<i>The attached screenshot and PDF reflect this check; verify the official site for the latest status.</i>`,
+    message: `<b>📦 DakSewa Tracking Update</b>\n\n${summary}\n\n<i>Details are taken from the verified India Post result page. Fields not shown by the portal are omitted.</i>\n\n<a href="https://www.indiapost.gov.in/">Open India Post official website</a>\n\n<i>The attached screenshot and PDF reflect this check; verify the official site for the latest status.</i>`,
   };
 }
 
