@@ -226,13 +226,6 @@ async function replyWithTrackingArtifacts(ctx, result, consignment) {
   } else {
     await ctx.reply("⚠️ India Post returned a result, but I couldn't capture its screenshot.");
   }
-  if (result.reportPdf?.length) {
-    await ctx.replyWithDocument(new InputFile(result.reportPdf, `daksewa-${consignment}-report.pdf`), {
-      caption: "📄 India Post tracking report (PDF).",
-    });
-  } else {
-    await ctx.reply("⚠️ I couldn't generate the PDF report for this result.");
-  }
 }
 
 function safeError(error) {
