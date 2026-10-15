@@ -17,7 +17,11 @@ test("HTML escaping protects dynamic page text in Telegram HTML messages", () =>
   assert.equal(escapeHtml('<img src="x"> & O\'Reilly'), "&lt;img src=&quot;x&quot;&gt; &amp; O&#39;Reilly");
 });
 
-test("tracking output never depends on invented status fallback text", () => {
-  const allowed = ["Item Delivered", "Out for Delivery", "Item Received", "Item Dispatched", "In Transit"];
-  assert.ok(allowed.every((value) => typeof value === "string" && value.length > 0));
+test("generic landing page copy is not sufficient evidence of a tracking result", () => {
+  const resultPattern = /booking date|delivery date|tracking details|tracking history|article number|consignment number/i;
+  const statusPattern = /item delivered|out for delivery|item received|item dispatched|bag received|bag dispatched|return to sender|in transit|item booked/i;
+  const landingPage = "Track and Trace Services Consignment ID Article Number Search";
+  const trackingResult = "Consignment Number: XX123456789IN Booking Date: 12 Oct 2026 Item Dispatched";
+  assert.equal(resultPattern.test(landingPage) && statusPattern.test(landingPage), false);
+  assert.equal(resultPattern.test(trackingResult) && statusPattern.test(trackingResult), true);
 });
