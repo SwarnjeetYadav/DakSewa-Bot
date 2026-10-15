@@ -161,8 +161,29 @@ async function screenshotCaptcha(page) {
   const locator = await findCaptchaImage(page);
   if (!locator) throw new Error("Could not find a loaded CAPTCHA image on India Post’s page. The website may have changed its layout.");
 
-  // Use the actual element screenshot, not a broad parent container. This avoids
-  // including overlays, neighbouring labels, or the whole CAPTCHA form.
+  // India Post currently embeds the CAPTCHA as a data URL. Prefer the original
+  // image bytes over a browser screenshot: screenshots can capture CSS scaling,
+  // overlays, or rendering artifacts and may make the challenge hard to read.
+  const source = await locator.evaluate((element) => {
+    if (element instanceof HTMLImageElement) {
+      return {
+        src: element.currentSrc || element.src,
+        naturalWidth: element.naturalWidth,
+        naturalHeight: element.naturalHeight,
+      };
+    }
+    return null;
+  }).catch(() => null);
+
+  if (source?.src?.startsWith("data:image/") && source.naturalWidth >= 70 && source.naturalHeight >= 18) {
+    const match = source.src.match(/^data:image\\/[a-zA-Z0-9.+-]+;base64,([a-zA-Z0-9+/=]+)$/);
+    if (match) {
+      const original = Buffer.from(match[1], "base64");
+      if (original.length >= 500) return original;
+    }
+  }
+
+  // Fallback for portals that do not expose the image as an inline data URL.
   const image = Buffer.from(await locator.screenshot({ type: "png", timeout: 5000 }));
   if (image.length < 500) throw new Error("India Post returned an empty or incomplete CAPTCHA image. Please try /refresh.");
   return image;
