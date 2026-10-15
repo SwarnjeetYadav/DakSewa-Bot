@@ -50,8 +50,6 @@ async function locateTrackingForm(page) {
   await page.goto(TRACK_URL, { waitUntil: "domcontentloaded", timeout: TIMEOUT_MS });
   await page.waitForLoadState("networkidle", { timeout: Math.min(TIMEOUT_MS, 10000) }).catch(() => {});
 
-  // On the supplied screenshot the tracking widget has a Consignment ID tab
-  // and an Article Number radio option.
   await clickFirstVisible(page, [
     'a:has-text("Track \'N\' Trace View")',
     'button:has-text("Track \'N\' Trace")',
@@ -95,14 +93,11 @@ async function findCaptchaImage(page) {
       }
     } catch {}
   }
-
-  // Fallback: choose a small image/canvas in the nearest container mentioning CAPTCHA.
   for (const labelSelector of ['text=/captcha/i', 'label:has-text("CAPTCHA")']) {
     try {
       const label = page.locator(labelSelector).first();
       if (!(await label.isVisible({ timeout: 500 }))) continue;
-      const parent = label.locator("xpath=..");
-      const images = parent.locator("img, canvas");
+      const images = label.locator("xpath=..").locator("img, canvas");
       if (await images.count()) {
         const locator = images.first();
         if (await locator.isVisible()) return locator;
@@ -128,16 +123,6 @@ async function findCaptchaInput(page) {
   ]);
 }
 
-async function findConsignmentInput(page) {
-  return findVisible(page, [
-    'input[placeholder*="CONSIGNMENT" i]',
-    'input[aria-label*="Consignment" i]',
-    'input[name*="consignment" i]',
-    'input[id*="consignment" i]',
-    'input[placeholder*="Article Number" i]',
-  ]);
-}
-
 async function readResponse(page) {
   const body = normalizeText(await page.locator("body").innerText().catch(() => ""));
   return {
@@ -148,18 +133,14 @@ async function readResponse(page) {
   };
 }
 
-async function captureResult(page, consignmentNumber, bodyText) {
-  const body = bodyText || normalizeText(await page.locator("body").innerText().catch(() => ""));
-  const hints = [
-    "Item Delivered", "Delivered", "Out for Delivery", "Item Received",
-    "Item Dispatched", "Bag Received", "Bag Dispatched", "Return to Sender",
-    "In Transit", "Item Booked",
-  ];
-  const lower = body.toLowerCase();
-  const matches = hints.filter((status) => lower.includes(status.toLowerCase()));
-  const looksLikeTracking = /consignment|article number|booking date|delivery date|tracking details|item delivered|item dispatched|item received|out for delivery/i.test(body);
-  if (!looksLikeTracking || (!matches.length && body.length < 180)) return null;
+function looksLikeTrackingResult(body) {
+  const trackingFields = /booking date|delivery date|tracking details|tracking history|article number|consignment number/i.test(body);
+  const hasTrackingStatus = /item delivered|out for delivery|item received|item dispatched|bag received|bag dispatched|return to sender|in transit|item booked/i.test(body);
+  return trackingFields && hasTrackingStatus;
+}
 
+async function captureResult(page, consignmentNumber, body) {
+  if (!looksLikeTrackingResult(body)) return null;
   let detail = "";
   for (const selector of ["table", '[role="table"]', ".table-responsive", '[class*="track" i]', '[id*="track" i]', '[class*="result" i]', '[id*="result" i]']) {
     try {
@@ -180,9 +161,12 @@ async function captureResult(page, consignmentNumber, bodyText) {
     } catch {}
   }
   if (!detail) detail = body;
+  const statusHints = ["Item Delivered", "Out for Delivery", "Item Received", "Item Dispatched", "Bag Received", "Bag Dispatched", "Return to Sender", "In Transit", "Item Booked"];
+  const lower = body.toLowerCase();
+  const matches = statusHints.filter((status) => lower.includes(status.toLowerCase()));
   return {
     kind: "complete",
-    message: `<b>📦 DakSewa Tracking Update</b>\n\n<b>Consignment:</b> <code>${escapeHtml(consignmentNumber)}</code>\n<b>Detected status keywords:</b> ${escapeHtml(matches.length ? matches.join(" • ") : "Tracking details received")}\n\n<b>Details from India Post:</b>\n<pre>${escapeHtml(detail.slice(0, 3500))}</pre>\n\n<a href="https://www.indiapost.gov.in/">Open India Post official website</a>\n\n<i>Details are copied from the page at the time of this check. Verify the latest status on the official site.</i>`,
+    message: `<b>📦 DakSewa Tracking Update</b>\n\n<b>Consignment:</b> <code>${escapeHtml(consignmentNumber)}</code>\n<b>Detected status keywords:</b> ${escapeHtml(matches.join(" • "))}\n\n<b>Details from India Post:</b>\n<pre>${escapeHtml(detail.slice(0, 3500))}</pre>\n\n<a href="https://www.indiapost.gov.in/">Open India Post official website</a>\n\n<i>Details are copied from the page at the time of this check. Verify the latest status on the official site.</i>`,
   };
 }
 
@@ -254,16 +238,6 @@ export async function submitCaptcha(chatId, captchaText, { onCaptcha }) {
     return { kind: "expired" };
   }
 
-  if (response.notFound) {
-    await cancelTracking(chatId);
-    return {
-      kind: "complete",
-      message: `<b>📦 DakSewa Tracking Update</b>\n\n<b>Consignment:</b> <code>${escapeHtml(session.consignmentNumber)}</code>\n\nIndia Post reported that no matching record was found. Check the number on your receipt and try again. A recently booked item may take time to appear.\n\n<a href="https://www.indiapost.gov.in/">Open India Post official website</a>`,
-    };
-  }
-
-  // Check for CAPTCHA errors before parsing generic page text. The page may retain
-  // the tracking form and the word "consignment" after a bad CAPTCHA.
   if (response.captchaWrong) {
     session.attempts += 1;
     if (session.attempts >= MAX_CAPTCHA_ATTEMPTS) {
@@ -283,7 +257,15 @@ export async function submitCaptcha(chatId, captchaText, { onCaptcha }) {
     return result;
   }
 
-  // No status is guessed when the website responds with an unknown layout.
+  if (response.notFound) {
+    const number = session.consignmentNumber;
+    await cancelTracking(chatId);
+    return {
+      kind: "complete",
+      message: `<b>📦 DakSewa Tracking Update</b>\n\n<b>Consignment:</b> <code>${escapeHtml(number)}</code>\n\nIndia Post reported that no matching record was found. Check the number on your receipt and try again. A recently booked item may take time to appear.\n\n<a href="https://www.indiapost.gov.in/">Open India Post official website</a>`,
+    };
+  }
+
   const captcha = await screenshotCaptcha(session.page).catch(() => null);
   if (!captcha) {
     await cancelTracking(chatId);
@@ -292,7 +274,7 @@ export async function submitCaptcha(chatId, captchaText, { onCaptcha }) {
   await onCaptcha({
     image: captcha,
     attempt: session.attempts + 1,
-    note: "The page did not return a clear result. Check the image and try again, or send /refresh.",
+    note: "The page did not return a clear result. Try the CAPTCHA once more, or send /refresh for a new image.",
   });
   return { kind: "captcha" };
 }
