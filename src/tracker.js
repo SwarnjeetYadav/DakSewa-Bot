@@ -240,7 +240,7 @@ function extractField(text, labels) {
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     for (const label of labels) {
-      const escapedLabel = label.replace(/[.*+?^$\{\}()|[\]\\]/g, "\\      const pattern = new RegExp("^" + label + "\s*[:：]?\s*(.*)$", "i");");
+      const escapedLabel = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
       const pattern = new RegExp("^" + escapedLabel + "\\s*[:：]?\\s*(.*)$", "i");
       const match = line.match(pattern);
       if (match && match[1].trim()) return match[1].trim();
@@ -251,7 +251,6 @@ function extractField(text, labels) {
   }
   return null;
 }
-
 function extractTrackingDetails(detail, body, consignmentNumber) {
   const source = normalizeText(detail);
   const full = normalizeText(body);
