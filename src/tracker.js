@@ -216,7 +216,7 @@ function looksLikeTrackingResult(body) {
 }
 
 async function captureResult(page, consignmentNumber, body) {
-  if (!looksLikeTrackingResult(body)) return null;
+  if (!looksLikeTrackingResult(body, consignmentNumber)) return null;
   let detail = "";
   for (const selector of ["table", '[role="table"]', ".table-responsive", '[class*="track" i]', '[id*="track" i]', '[class*="result" i]', '[id*="result" i]']) {
     try {
@@ -436,8 +436,14 @@ export async function submitCaptcha(chatId, captchaText, { onCaptcha }) {
 
   const captcha = await screenshotCaptcha(session.page).catch(() => null);
   if (!captcha) {
+    const diagnosticBody = response.body.slice(0, 700);
+    console.warn("Unclassified India Post response after CAPTCHA submission:", {
+      url: session.page.url(),
+      title: await session.page.title().catch(() => ""),
+      body: diagnosticBody,
+    });
     await cancelTracking(chatId);
-    throw new Error("India Post returned an unrecognized response. Please start again later.");
+    throw new Error("India Post’s response could not be identified after CAPTCHA submission. This can happen if the portal changes its response or the CAPTCHA session expires. Check the bot terminal diagnostics and try /track again.");
   }
   await onCaptcha({
     image: captcha,
