@@ -297,7 +297,7 @@ export async function submitCaptcha(chatId, captchaText, { onCaptcha }) {
   await input.fill(captchaText);
   // India Post may render Search as a styled control rather than a native button.
   // Try semantic controls first, then exact visible text to avoid clicking a parent.
-  const submitted = await clickFirstVisible(session.page, [
+  const searchSelectors = [
     'button:has-text("Search")',
     '[role="button"]:has-text("Search")',
     'input[type="submit"][value*="Search" i]',
@@ -305,10 +305,75 @@ export async function submitCaptcha(chatId, captchaText, { onCaptcha }) {
     'button[type="submit"]',
     'input[type="submit"]',
     'text=/^Search$/i',
-  ]);
+  ];
+
+  // Check the main document and any embedded frames; the portal's tracking
+  // widget may be rendered separately from the page shell.
+  let submitted = false;
+  for (const frame of session.page.frames()) {
+    submitted = await clickFirstVisible(frame, searchSelectors);
+    if (submitted) break;
+  }
+
+  // Fallback for custom controls without button semantics. Only click a visible
+  // element whose own normalized text is exactly "Search".
   if (!submitted) {
+    for (const frame of session.page.frames()) {
+      try {
+        submitted = await frame.evaluate(() => {
+          const visible = (el) => {
+            const rect = el.getBoundingClientRect();
+            const style = getComputedStyle(el);
+            return rect.width > 0 && rect.height > 0 &&
+              style.visibility !== "hidden" && style.display !== "none" &&
+              Number(style.opacity) !== 0;
+          };
+          const candidates = [...document.querySelectorAll("button, input, a, [role='button'], div, span")]
+            .filter((el) => visible(el))
+            .filter((el) => {
+              const text = el instanceof HTMLInputElement ? el.value : el.innerText;
+              return (text || "").replace(/\\s+/g, " ").trim().toLowerCase() === "search";
+            })
+            .sort((a, b) => {
+              const ar = a.getBoundingClientRect(), br = b.getBoundingClientRect();
+              return (ar.width * ar.height) - (br.width * br.height);
+            });
+          if (!candidates.length) return false;
+          candidates[0].click();
+          return true;
+        });
+      } catch {}
+      if (submitted) break;
+    }
+  }
+
+  if (!submitted) {
+    const diagnostics = [];
+    for (const [index, frame] of session.page.frames().entries()) {
+      try {
+        diagnostics.push(await frame.evaluate((frameIndex) => ({
+          frameIndex,
+          url: location.href,
+          title: document.title,
+          visibleControls: [...document.querySelectorAll("button, input, [role='button'], a")]
+            .filter((el) => {
+              const r = el.getBoundingClientRect(), s = getComputedStyle(el);
+              return r.width > 0 && r.height > 0 && s.display !== "none" && s.visibility !== "hidden";
+            })
+            .slice(0, 40)
+            .map((el) => ({
+              tag: el.tagName,
+              type: el.getAttribute("type"),
+              text: (el.innerText || el.value || el.getAttribute("aria-label") || "").trim().slice(0, 80),
+              id: el.id || "",
+              className: typeof el.className === "string" ? el.className.slice(0, 100) : "",
+            })),
+        }), index));
+      } catch {}
+    }
+    console.error("India Post Search control diagnostics:", JSON.stringify(diagnostics));
     await cancelTracking(chatId);
-    throw new Error("Could not find the Search button on India Post’s tracking form.");
+    throw new Error("Could not find the Search control. Diagnostic details were written to the bot terminal.");
   }
 
   await session.page.waitForTimeout(1200);
