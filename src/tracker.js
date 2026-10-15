@@ -221,9 +221,11 @@ function looksLikeTrackingResult(body, consignmentNumber, url = "") {
     /article number|consignment (?:no\.?|number)|booked at|booked on|booking date|destination pincode|origin pincode/i.test(text);
   const hasStatusField =
     /(?:current status|article status|tracking status|status)\s*[:\-]?\s*(?:delivered|out for delivery|in transit|dispatched|booked|received|returned|return to sender)/i.test(text);
-  const hasEventRows =
-    /(?:\b(?:booked|dispatched|in transit|out for delivery|delivered|item received|bag received|return to sender)\b.{0,100}(?:\d{1,2}[\/-][A-Za-z0-9\/-]+|\d{4}|office|pincode|delivery))/i.test(text);
-  return resultRoute && hasResultFields && (hasStatusField || hasEventRows);
+  // The portal's timeline sometimes renders the status and its date/office on
+  // separate lines, so don't require them to be on the same line.
+  const hasStatusTerm =
+    /\b(?:delivered|out for delivery|in transit|item dispatched|article dispatched|bag dispatched|item booked|article booked|item received|article received|bag received|return to sender)\b/i.test(text);
+  return resultRoute && hasResultFields && (hasStatusField || hasStatusTerm);
 }
 
 function extractField(text, labels) {
