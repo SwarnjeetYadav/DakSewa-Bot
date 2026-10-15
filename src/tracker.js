@@ -545,23 +545,16 @@ export async function submitCaptcha(chatId, captchaText, { onCaptcha }) {
     };
   }
 
-  const captcha = await screenshotCaptcha(session.page).catch(() => null);
-  if (!captcha) {
-    const diagnosticBody = response.body.slice(0, 700);
-    console.warn("Unclassified India Post response after CAPTCHA submission:", {
-      url: session.page.url(),
-      title: await session.page.title().catch(() => ""),
-      body: diagnosticBody,
-    });
-    await cancelTracking(chatId);
-    throw new Error("India Post’s response could not be identified after CAPTCHA submission. This can happen if the portal changes its response or the CAPTCHA session expires. Check the bot terminal diagnostics and try /track again.");
-  }
-  await onCaptcha({
-    image: captcha,
-    attempt: session.attempts + 1,
-    note: "The page did not return a clear result. Try the CAPTCHA once more, or send /refresh for a new image.",
+  // A stale CAPTCHA image can remain visible after a failed SPA navigation.
+  // Do not send it automatically again: only an explicit CAPTCHA rejection
+  // above should trigger a new challenge.
+  console.warn("Unclassified India Post response after CAPTCHA submission:", {
+    url: session.page.url(),
+    title: await session.page.title().catch(() => ""),
+    body: response.body.slice(0, 700),
   });
-  return { kind: "captcha" };
+  await cancelTracking(chatId);
+  throw new Error("India Post did not return a verifiable tracking result after CAPTCHA submission. I stopped this attempt to avoid repeating the same CAPTCHA. Please try /track again later; no parcel status has been assumed.");
 }
 
 async function refreshCaptchaInPage(page) {
