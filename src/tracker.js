@@ -320,10 +320,15 @@ async function captureResult(page, consignmentNumber, body) {
       }
     } catch {}
   }
-  // Prefer the shortest matching result block to avoid shared navigation and
-  // homepage announcements; fall back to body only if it is itself verified.
-  if (candidates.length) detail = candidates.sort((a, b) => a.length - b.length)[0];
-  if (!detail) detail = body;
+  // Prefer the smallest matching block that contains both result fields and
+  // a status term. A tiny block containing only the consignment number is not
+  // enough evidence to classify the parcel.
+  const verifiedCandidates = candidates.filter((candidate) =>
+    /article number|consignment (?:no\\.?|number)|booked at|booked on|booking date|destination pincode|origin pincode/i.test(candidate) &&
+    /\\b(?:delivered|out for delivery|in transit|item dispatched|article dispatched|bag dispatched|item booked|article booked|item received|article received|bag received|return to sender)\\b/i.test(candidate)
+  );
+  if (verifiedCandidates.length) detail = verifiedCandidates.sort((a, b) => a.length - b.length)[0];
+  else detail = body;
   const fields = extractTrackingDetails(detail, body, consignmentNumber);
   if (!fields.consignmentNumber || fields.consignmentNumber.toLowerCase() !== consignmentNumber.toLowerCase() || !fields.currentStatus) {
     console.warn("India Post result failed field verification:", {
