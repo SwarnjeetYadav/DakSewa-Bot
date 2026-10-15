@@ -77,30 +77,80 @@ async function locateTrackingForm(page) {
 }
 
 async function findCaptchaImage(page) {
-  const candidates = [
+  // Prefer an actual loaded CAPTCHA asset. Broad selectors such as
+  // "[id*=captcha] img" can match decorative/placeholder images on the page.
+  const selectors = [
     'img[alt*="captcha" i]',
+    'img[title*="captcha" i]',
     'img[src*="captcha" i]',
     'canvas[aria-label*="captcha" i]',
+    'canvas[id*="captcha" i]',
     '[id*="captcha" i] img',
-    'img[title*="captcha" i]',
   ];
-  for (const selector of candidates) {
+
+  const candidates = [];
+  for (const selector of selectors) {
     try {
-      const locator = page.locator(selector).first();
-      if (await locator.isVisible({ timeout: 500 })) {
-        const box = await locator.boundingBox();
-        if (box && box.width >= 40 && box.height >= 12) return locator;
+      const locators = page.locator(selector);
+      const count = Math.min(await locators.count(), 10);
+      for (let i = 0; i < count; i++) {
+        const locator = locators.nth(i);
+        if (!(await locator.isVisible({ timeout: 500 }).catch(() => false))) continue;
+        const box = await locator.boundingBox().catch(() => null);
+        if (!box || box.width < 70 || box.height < 18) continue;
+
+        const info = await locator.evaluate((element) => {
+          const style = getComputedStyle(element);
+          const isImage = element instanceof HTMLImageElement;
+          return {
+            tag: element.tagName,
+            alt: isImage ? element.alt : "",
+            src: isImage ? element.currentSrc || element.src : "",
+            complete: isImage ? element.complete : true,
+            naturalWidth: isImage ? element.naturalWidth : 0,
+            naturalHeight: isImage ? element.naturalHeight : 0,
+            filter: style.filter,
+            opacity: style.opacity,
+            width: element.clientWidth,
+            height: element.clientHeight,
+          };
+        }).catch(() => null);
+        if (!info) continue;
+
+        // A broken or not-yet-loaded img often screenshots as a grey box.
+        if (info.tag === "IMG" && (!info.complete || info.naturalWidth < 40 || info.naturalHeight < 12)) continue;
+        const text = `${selector} ${info.alt} ${info.src}`.toLowerCase();
+        const explicitMatch = /captcha/.test(text) ? 100 : 0;
+        const loadedImage = info.tag === "IMG" && info.naturalWidth > 0 ? 30 : 0;
+        candidates.push({ locator, score: explicitMatch + loadedImage + Math.min(box.width, 300) / 100, info });
       }
     } catch {}
   }
+
+  candidates.sort((a, b) => b.score - a.score);
+  if (candidates.length) {
+    const best = candidates[0];
+    // Wait briefly for any final image decode/layout update before capturing it.
+    if (best.info.tag === "IMG") {
+      await best.locator.evaluate(async (img) => {
+        if (img.decode) await img.decode().catch(() => {});
+      }).catch(() => {});
+    }
+    return best.locator;
+  }
+
+  // Some versions of the portal render the challenge on a canvas or as a CSS
+  // background rather than an <img>. Restrict fallback to a CAPTCHA-labelled
+  // block and only accept a challenge-sized child element.
   for (const labelSelector of ['text=/captcha/i', 'label:has-text("CAPTCHA")']) {
     try {
       const label = page.locator(labelSelector).first();
       if (!(await label.isVisible({ timeout: 500 }))) continue;
-      const images = label.locator("xpath=..").locator("img, canvas");
-      if (await images.count()) {
-        const locator = images.first();
-        if (await locator.isVisible()) return locator;
+      for (const selector of ["canvas", 'img[src^="data:image" i]', '[style*="background-image" i]']) {
+        const locator = label.locator("xpath=..").locator(selector).first();
+        if (!(await locator.isVisible({ timeout: 500 }).catch(() => false))) continue;
+        const box = await locator.boundingBox().catch(() => null);
+        if (box && box.width >= 70 && box.height >= 18) return locator;
       }
     } catch {}
   }
@@ -109,8 +159,13 @@ async function findCaptchaImage(page) {
 
 async function screenshotCaptcha(page) {
   const locator = await findCaptchaImage(page);
-  if (!locator) throw new Error("India Post’s CAPTCHA image could not be located. The website may have changed its layout.");
-  return Buffer.from(await locator.screenshot({ type: "png", timeout: 5000 }));
+  if (!locator) throw new Error("Could not find a loaded CAPTCHA image on India Post’s page. The website may have changed its layout.");
+
+  // Use the actual element screenshot, not a broad parent container. This avoids
+  // including overlays, neighbouring labels, or the whole CAPTCHA form.
+  const image = Buffer.from(await locator.screenshot({ type: "png", timeout: 5000 }));
+  if (image.length < 500) throw new Error("India Post returned an empty or incomplete CAPTCHA image. Please try /refresh.");
+  return image;
 }
 
 async function findCaptchaInput(page) {
