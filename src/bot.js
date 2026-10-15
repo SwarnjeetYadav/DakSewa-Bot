@@ -1,4 +1,4 @@
-import { Bot, InlineKeyboard, session } from "grammy";
+import { Bot, InlineKeyboard, InputFile, session } from "grammy";
 import {
   beginTracking,
   submitCaptcha,
@@ -87,7 +87,7 @@ export function startBot() {
       ctx.session.state = "loading_tracking";
       await refreshCaptcha(ctx.chat.id, async ({ image, note }) => {
         ctx.session.state = "awaiting_captcha";
-        await ctx.replyWithPhoto(new Blob([image], { type: "image/png" }), {
+        await ctx.replyWithPhoto(new InputFile(image, "captcha.png"), {
           caption: `🧩 *Fresh CAPTCHA*\n\n${note ?? "Please enter the characters shown."}\n\nReply with the CAPTCHA text.`,
           parse_mode: "Markdown",
         });
@@ -119,7 +119,7 @@ export function startBot() {
           consignmentNumber: consignment,
           onCaptcha: async ({ image, attempt, note }) => {
             ctx.session.state = "awaiting_captcha";
-            await ctx.replyWithPhoto(new Blob([image], { type: "image/png" }), {
+            await ctx.replyWithPhoto(new InputFile(image, "captcha.png"), {
               caption: [
                 attempt > 1 ? "🔁 *New CAPTCHA*" : "🧩 *Please enter the CAPTCHA*",
                 note ?? "",
@@ -161,7 +161,7 @@ export function startBot() {
         const result = await submitCaptcha(ctx.chat.id, text, {
           onCaptcha: async ({ image, attempt, note }) => {
             ctx.session.state = "awaiting_captcha";
-            await ctx.replyWithPhoto(new Blob([image], { type: "image/png" }), {
+            await ctx.replyWithPhoto(new InputFile(image, "captcha.png"), {
               caption: [
                 attempt > 1 ? "❌ *CAPTCHA not accepted — try again*" : "🧩 *Please enter the CAPTCHA*",
                 note ?? "Please read the new image carefully and try again.",
