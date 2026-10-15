@@ -240,9 +240,31 @@ async function captureResult(page, consignmentNumber, body) {
   const statusHints = ["Item Delivered", "Out for Delivery", "Item Received", "Item Dispatched", "Bag Received", "Bag Dispatched", "Return to Sender", "In Transit", "Item Booked"];
   const lower = body.toLowerCase();
   const matches = statusHints.filter((status) => lower.includes(status.toLowerCase()));
+  // Preserve a visual copy of the actual result page for the user.
+  // Generate both artifacts before the tracking browser context is closed.
+  let screenshot = null;
+  let reportPdf = null;
+  try {
+    screenshot = Buffer.from(await page.screenshot({ type: "png", fullPage: true, animations: "disabled" }));
+  } catch (error) {
+    console.warn("Could not capture India Post result screenshot:", error.message);
+  }
+  try {
+    reportPdf = Buffer.from(await page.pdf({
+      format: "A4",
+      printBackground: true,
+      preferCSSPageSize: true,
+      margin: { top: "10mm", right: "10mm", bottom: "10mm", left: "10mm" },
+    }));
+  } catch (error) {
+    console.warn("Could not generate India Post tracking PDF:", error.message);
+  }
+
   return {
     kind: "complete",
-    message: `<b>📦 DakSewa Tracking Update</b>\n\n<b>Consignment:</b> <code>${escapeHtml(consignmentNumber)}</code>\n<b>Detected status keywords:</b> ${escapeHtml(matches.join(" • "))}\n\n<b>Details from India Post:</b>\n<pre>${escapeHtml(detail.slice(0, 3500))}</pre>\n\n<a href="https://www.indiapost.gov.in/">Open India Post official website</a>\n\n<i>Details are copied from the page at the time of this check. Verify the latest status on the official site.</i>`,
+    screenshot,
+    reportPdf,
+    message: `<b>📦 DakSewa Tracking Update</b>\n\n<b>Consignment:</b> <code>${escapeHtml(consignmentNumber)}</code>\n<b>Detected status keywords:</b> ${escapeHtml(matches.join(" • "))}\n\n<b>Details from India Post:</b>\n<pre>${escapeHtml(detail.slice(0, 3500))}</pre>\n\n<a href="https://www.indiapost.gov.in/">Open India Post official website</a>\n\n<i>Attached screenshot and PDF are captured from the page at the time of this check. Verify the latest status on the official site.</i>`,
   };
 }
 
