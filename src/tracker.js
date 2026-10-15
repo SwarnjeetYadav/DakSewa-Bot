@@ -295,11 +295,16 @@ export async function submitCaptcha(chatId, captchaText, { onCaptcha }) {
     return { kind: "expired" };
   }
   await input.fill(captchaText);
+  // India Post may render Search as a styled control rather than a native button.
+  // Try semantic controls first, then exact visible text to avoid clicking a parent.
   const submitted = await clickFirstVisible(session.page, [
     'button:has-text("Search")',
+    '[role="button"]:has-text("Search")',
     'input[type="submit"][value*="Search" i]',
+    'input[type="button"][value*="Search" i]',
     'button[type="submit"]',
     'input[type="submit"]',
+    'text=/^Search$/i',
   ]);
   if (!submitted) {
     await cancelTracking(chatId);
