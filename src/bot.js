@@ -18,7 +18,7 @@ const HELP_TEXT = [
   "3. Read the image and reply with the CAPTCHA text.",
   "4. I submit it and share the tracking details shown by India Post.",
   "",
-  "Commands: /track to start, /cancel to stop, /help for help.",
+  "Commands: /track to start, /refresh for a new CAPTCHA, /cancel to stop, /help for help.",
   "",
   "🔐 CAPTCHA is intentionally completed by you. DakSewa does not solve or bypass it.",
 ].join("\n");
@@ -31,18 +31,13 @@ function mainKeyboard() {
 
 export function startBot() {
   const bot = new Bot(process.env.TELEGRAM_BOT_TOKEN);
-
   bot.use(session({
-    initial: () => ({
-      state: "idle",
-      consignmentNumber: null,
-      createdAt: null,
-      lastStatus: null,
-    }),
+    initial: () => ({ state: "idle", consignmentNumber: null, createdAt: null, lastStatus: null }),
   }));
 
   bot.command("start", async (ctx) => {
     ctx.session.state = "idle";
+    await cancelTracking(ctx.chat.id);
     await ctx.reply(
       "Welcome to *DakSewa*! 📮\n\nTrack your India Post parcel in a few guided steps.\n\nChoose an option below to begin.",
       { parse_mode: "Markdown", reply_markup: mainKeyboard() },
@@ -54,6 +49,7 @@ export function startBot() {
   });
 
   bot.command("track", async (ctx) => {
+    await cancelTracking(ctx.chat.id);
     ctx.session.state = "awaiting_consignment";
     ctx.session.consignmentNumber = null;
     await ctx.reply(
@@ -71,16 +67,36 @@ export function startBot() {
 
   bot.callbackQuery("track:start", async (ctx) => {
     await ctx.answerCallbackQuery();
+    await cancelTracking(ctx.chat.id);
     ctx.session.state = "awaiting_consignment";
     ctx.session.consignmentNumber = null;
-    await ctx.reply(
-      "📦 Please send your India Post consignment/article number.\n\nFor your privacy, send it only in this chat.",
-    );
+    await ctx.reply("📦 Please send your India Post consignment/article number.\n\nFor your privacy, send it only in this chat.");
   });
 
   bot.callbackQuery("help:show", async (ctx) => {
     await ctx.answerCallbackQuery();
     await ctx.reply(HELP_TEXT, { parse_mode: "Markdown", reply_markup: mainKeyboard() });
+  });
+
+  bot.command("refresh", async (ctx) => {
+    if (ctx.session.state !== "awaiting_captcha") {
+      await ctx.reply("There’s no active CAPTCHA to refresh. Send /track to start a new tracking request.");
+      return;
+    }
+    try {
+      ctx.session.state = "loading_tracking";
+      await refreshCaptcha(ctx.chat.id, async ({ image, note }) => {
+        ctx.session.state = "awaiting_captcha";
+        await ctx.replyWithPhoto(new Blob([image], { type: "image/png" }), {
+          caption: `🧩 *Fresh CAPTCHA*\n\n${note ?? "Please enter the characters shown."}\n\nReply with the CAPTCHA text.`,
+          parse_mode: "Markdown",
+        });
+      });
+    } catch (error) {
+      ctx.session.state = "awaiting_consignment";
+      ctx.session.consignmentNumber = null;
+      await ctx.reply(`Couldn’t refresh the CAPTCHA: ${safeError(error)}. Please use /track to restart.`);
+    }
   });
 
   bot.on("message:text", async (ctx) => {
@@ -90,9 +106,7 @@ export function startBot() {
     if (ctx.session.state === "awaiting_consignment") {
       const consignment = text.replace(/\s+/g, "");
       if (!/^[A-Za-z0-9]{8,20}$/.test(consignment)) {
-        await ctx.reply(
-          "⚠️ That number doesn’t look right. Please send the consignment/article number (8–20 letters or digits), without spaces. Check the number on your receipt.",
-        );
+        await ctx.reply("⚠️ That number doesn’t look right. Please send the consignment/article number (8–20 letters or digits), without spaces.");
         return;
       }
 
@@ -105,31 +119,29 @@ export function startBot() {
           consignmentNumber: consignment,
           onCaptcha: async ({ image, attempt, note }) => {
             ctx.session.state = "awaiting_captcha";
-            const caption = [
-              attempt > 1 ? "🔁 *New CAPTCHA*" : "🧩 *Please enter the CAPTCHA*",
-              note ?? "",
-              "Read the characters in this image and reply with them in this chat.",
-              "If the image is unclear, send /refresh. Send /cancel to stop.",
-              "_I won’t guess or automatically solve the CAPTCHA._",
-            ].filter(Boolean).join("\n\n");
             await ctx.replyWithPhoto(new Blob([image], { type: "image/png" }), {
-              caption,
+              caption: [
+                attempt > 1 ? "🔁 *New CAPTCHA*" : "🧩 *Please enter the CAPTCHA*",
+                note ?? "",
+                "Read the characters in this image and reply with them in this chat.",
+                "If the image is unclear, send /refresh. Send /cancel to stop.",
+                "_I won’t guess or automatically solve the CAPTCHA._",
+              ].filter(Boolean).join("\n\n"),
               parse_mode: "Markdown",
             });
-          },
-          onStatus: async (status) => {
-            ctx.session.lastStatus = status;
-            await ctx.reply(status);
           },
         });
         if (result.kind === "complete") {
           ctx.session.state = "idle";
+          ctx.session.consignmentNumber = null;
           await ctx.reply(result.message, { parse_mode: "HTML", reply_markup: mainKeyboard() });
         } else if (result.kind === "captcha") {
           ctx.session.state = "awaiting_captcha";
         }
       } catch (error) {
+        await cancelTracking(ctx.chat.id);
         ctx.session.state = "idle";
+        ctx.session.consignmentNumber = null;
         await ctx.reply(
           `❌ I couldn’t open or read the India Post tracking page right now.\n\nDetails: ${safeError(error)}\n\nPlease try again later with /track. No tracking status has been assumed.`,
           { reply_markup: mainKeyboard() },
@@ -151,7 +163,7 @@ export function startBot() {
             ctx.session.state = "awaiting_captcha";
             await ctx.replyWithPhoto(new Blob([image], { type: "image/png" }), {
               caption: [
-                "❌ *That CAPTCHA was not accepted.*",
+                attempt > 1 ? "❌ *CAPTCHA not accepted — try again*" : "🧩 *Please enter the CAPTCHA*",
                 note ?? "Please read the new image carefully and try again.",
                 "Reply with the characters in this image, or send /refresh.",
               ].join("\n\n"),
@@ -167,9 +179,11 @@ export function startBot() {
           ctx.session.state = "awaiting_captcha";
         } else if (result.kind === "expired") {
           ctx.session.state = "awaiting_consignment";
+          ctx.session.consignmentNumber = null;
           await ctx.reply("⌛ The India Post page/session expired. Please send your consignment number again to restart.");
         }
       } catch (error) {
+        await cancelTracking(ctx.chat.id);
         ctx.session.state = "idle";
         ctx.session.consignmentNumber = null;
         await ctx.reply(
@@ -190,33 +204,11 @@ export function startBot() {
     });
   });
 
-  bot.command("refresh", async (ctx) => {
-    if (ctx.session.state !== "awaiting_captcha") {
-      await ctx.reply("There’s no active CAPTCHA to refresh. Send /track to start a new tracking request.");
-      return;
-    }
-    try {
-      ctx.session.state = "loading_tracking";
-      await refreshCaptcha(ctx.chat.id, async ({ image, attempt, note }) => {
-        ctx.session.state = "awaiting_captcha";
-        await ctx.replyWithPhoto(new Blob([image], { type: "image/png" }), {
-          caption: `🧩 *Fresh CAPTCHA*\n\n${note ?? "Please enter the characters shown."}\n\nReply with the CAPTCHA text.`,
-          parse_mode: "Markdown",
-        });
-      });
-    } catch (error) {
-      ctx.session.state = "idle";
-      await ctx.reply(`Couldn’t refresh the CAPTCHA: ${safeError(error)}. Please use /track to restart.`);
-    }
-  });
-
   bot.catch((error) => {
     console.error("Telegram update error:", error.error?.stack ?? error.error);
   });
 
-  const polling = bot.start({
-    onStart: (info) => console.log(`DakSewa is running as @${info.username}`),
-  });
+  const polling = bot.start({ onStart: (info) => console.log(`DakSewa is running as @${info.username}`) });
   polling.catch((error) => console.error("Bot polling stopped:", error));
   console.log(`Active tracking sessions: ${getActiveTrackingCount()} at startup`);
   return bot;
