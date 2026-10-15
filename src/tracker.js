@@ -353,22 +353,12 @@ async function captureResult(page, consignmentNumber, body) {
   }
 
   let screenshot = null;
-  let reportPdf = null;
   try {
+    // Capture the actual rendered India Post result page after verification.
+    // The user requested a screenshot only; do not generate a PDF.
     screenshot = Buffer.from(await page.screenshot({ type: "png", fullPage: true, animations: "disabled" }));
   } catch (error) {
     console.warn("Could not capture India Post result screenshot:", error.message);
-  }
-  try {
-    // Use the page's print layout only after the actual result has been verified.
-    reportPdf = Buffer.from(await page.pdf({
-      format: "A4",
-      printBackground: true,
-      preferCSSPageSize: true,
-      margin: { top: "10mm", right: "10mm", bottom: "10mm", left: "10mm" },
-    }));
-  } catch (error) {
-    console.warn("Could not generate India Post tracking PDF:", error.message);
   }
 
   const rows = [
@@ -384,8 +374,7 @@ async function captureResult(page, consignmentNumber, body) {
   return {
     kind: "complete",
     screenshot,
-    reportPdf,
-    message: `<b>📦 DakSewa Tracking Update</b>\n\n${summary}\n\n<i>Details are taken from the verified India Post result page. Fields not shown by the portal are omitted.</i>\n\n<a href="https://www.indiapost.gov.in/">Open India Post official website</a>\n\n<i>The attached screenshot and PDF reflect this check; verify the official site for the latest status.</i>`,
+    message: `<b>📦 DakSewa Tracking Update</b>\n\n${summary}\n\n<i>Details are taken from the verified India Post result page. Fields not shown by the portal are omitted.</i>\n\n<a href="https://www.indiapost.gov.in/">Open India Post official website</a>\n\n<i>The screenshot reflects the official result page at the time of this check. Verify the official site for the latest status.</i>`,
   };
 }
 
