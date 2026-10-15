@@ -132,23 +132,10 @@ export function startBot() {
           },
         });
         if (result.kind === "complete") {
+          const completedConsignment = ctx.session.consignmentNumber || "tracking";
           ctx.session.state = "idle";
           ctx.session.consignmentNumber = null;
-          await ctx.reply(result.message, { parse_mode: "HTML", reply_markup: mainKeyboard() });
-          if (result.screenshot?.length) {
-            await ctx.replyWithPhoto(new InputFile(result.screenshot, `daksewa-${consignment}-tracking.png`), {
-              caption: "🖼️ Screenshot of the India Post tracking result.",
-            });
-          } else {
-            await ctx.reply("⚠️ India Post returned a result, but I couldn't capture its screenshot.");
-          }
-          if (result.reportPdf?.length) {
-            await ctx.replyWithDocument(new InputFile(result.reportPdf, `daksewa-${consignment}-report.pdf`), {
-              caption: "📄 India Post tracking report (PDF).",
-            });
-          } else {
-            await ctx.reply("⚠️ I couldn't generate the PDF report for this result.");
-          }
+          await replyWithTrackingArtifacts(ctx, result, completedConsignment);
         } else if (result.kind === "captcha") {
           ctx.session.state = "awaiting_captcha";
         }
@@ -186,23 +173,10 @@ export function startBot() {
           },
         });
         if (result.kind === "complete") {
+          const completedConsignment = ctx.session.consignmentNumber || "tracking";
           ctx.session.state = "idle";
           ctx.session.consignmentNumber = null;
-          await ctx.reply(result.message, { parse_mode: "HTML", reply_markup: mainKeyboard() });
-          if (result.screenshot?.length) {
-            await ctx.replyWithPhoto(new InputFile(result.screenshot, `daksewa-${consignment}-tracking.png`), {
-              caption: "🖼️ Screenshot of the India Post tracking result.",
-            });
-          } else {
-            await ctx.reply("⚠️ India Post returned a result, but I couldn't capture its screenshot.");
-          }
-          if (result.reportPdf?.length) {
-            await ctx.replyWithDocument(new InputFile(result.reportPdf, `daksewa-${consignment}-report.pdf`), {
-              caption: "📄 India Post tracking report (PDF).",
-            });
-          } else {
-            await ctx.reply("⚠️ I couldn't generate the PDF report for this result.");
-          }
+          await replyWithTrackingArtifacts(ctx, result, completedConsignment);
         } else if (result.kind === "captcha") {
           ctx.session.state = "awaiting_captcha";
         } else if (result.kind === "expired") {
@@ -240,6 +214,25 @@ export function startBot() {
   polling.catch((error) => console.error("Bot polling stopped:", error));
   console.log(`Active tracking sessions: ${getActiveTrackingCount()} at startup`);
   return bot;
+}
+
+
+async function replyWithTrackingArtifacts(ctx, result, consignment) {
+  await ctx.reply(result.message, { parse_mode: "HTML", reply_markup: mainKeyboard() });
+  if (result.screenshot?.length) {
+    await ctx.replyWithPhoto(new InputFile(result.screenshot, `daksewa-${consignment}-tracking.png`), {
+      caption: "🖼️ Screenshot of the verified India Post tracking result.",
+    });
+  } else {
+    await ctx.reply("⚠️ India Post returned a result, but I couldn't capture its screenshot.");
+  }
+  if (result.reportPdf?.length) {
+    await ctx.replyWithDocument(new InputFile(result.reportPdf, `daksewa-${consignment}-report.pdf`), {
+      caption: "📄 India Post tracking report (PDF).",
+    });
+  } else {
+    await ctx.reply("⚠️ I couldn't generate the PDF report for this result.");
+  }
 }
 
 function safeError(error) {
