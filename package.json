@@ -1,0 +1,18 @@
+{
+  "name": "dak-sewa-bot",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Telegram assistant for user-assisted India Post consignment tracking",
+  "type": "module",
+  "engines": { "node": ">=20.11.0" },
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "check": "node --check src/index.js && node --check src/bot.js && node --check src/tracker.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.7",
+    "grammy": "^1.35.0",
+    "playwright": "^1.51.1"
+  }
+}
