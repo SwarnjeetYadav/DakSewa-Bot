@@ -279,7 +279,8 @@ function extractField(text, labels) {
       const pattern = new RegExp("^" + escapedLabel + "\\s*[:：]?\\s*(.*)$", "i");
       const match = line.match(pattern);
       if (match && match[1].trim()) return match[1].trim();
-      if (match && lines[i + 1] && !/^(article|consignment|booked|booking|origin|destination|delivery|status|print report)/i.test(lines[i + 1])) {
+      if (match && lines[i + 1] &&
+          !/^(article number|article type|consignment(?: no\\.?| number)?|reference number|money order|complaint id|booked at|booked on|booking date|origin pincode|destination(?: pincode)?|delivered on|delivery date|current status|article status|tracking status|status|print report|search|generating captcha)\\s*:?$/i.test(lines[i + 1])) {
         return lines[i + 1];
       }
     }
