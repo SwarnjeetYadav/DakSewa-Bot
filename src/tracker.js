@@ -4,6 +4,7 @@ const TRACK_URL = process.env.INDIA_POST_TRACK_URL || "https://www.indiapost.gov
 const TIMEOUT_MS = Number(process.env.PAGE_TIMEOUT_MS || 30000);
 const MAX_CAPTCHA_ATTEMPTS = Number(process.env.MAX_CAPTCHA_ATTEMPTS || 5);
 const sessions = new Map();
+const userContexts = new Map();
 let browserPromise;
 
 async function getBrowser() {
@@ -383,12 +384,19 @@ function escapeHtml(value) {
 }
 
 async function buildSession(chatId, consignmentNumber) {
+  const key = String(chatId);
   const browser = await getBrowser();
-  const context = await browser.newContext({
-    viewport: { width: 1365, height: 900 },
-    locale: "en-IN",
-    timezoneId: "Asia/Kolkata",
-  });
+  // Reuse this user's isolated context, but create a fresh tab per request.
+  // Different Telegram users never share a page or browser context.
+  let context = userContexts.get(key);
+  if (!context || context.browser()?.isConnected() === false) {
+    context = await browser.newContext({
+      viewport: { width: 1365, height: 900 },
+      locale: "en-IN",
+      timezoneId: "Asia/Kolkata",
+    });
+    userContexts.set(key, context);
+  }
   const page = await context.newPage();
   page.setDefaultTimeout(5000);
   page.setDefaultNavigationTimeout(TIMEOUT_MS);
@@ -398,16 +406,18 @@ async function buildSession(chatId, consignmentNumber) {
     const input = await locateTrackingForm(page);
     await input.fill(consignmentNumber);
     const captcha = await screenshotCaptcha(page);
-    sessions.set(String(chatId), { context, page, consignmentNumber, attempts: 0, createdAt: Date.now() });
+    sessions.set(key, { context, page, consignmentNumber, attempts: 0, createdAt: Date.now() });
     return { image: captcha, attempt: 1 };
   } catch (error) {
-    await context.close().catch(() => {});
+    await page.close().catch(() => {});
     throw error;
   }
 }
 
 export async function beginTracking({ chatId, consignmentNumber, onCaptcha }) {
-  await cancelTracking(chatId);
+  // Close only this user's old tab; keep the shared Chromium process and
+  // isolated user context warm to reduce startup latency.
+  await cancelTracking(chatId, { closeContext: false });
   const result = await buildSession(chatId, consignmentNumber);
   await onCaptcha({ image: result.image, attempt: result.attempt });
   return { kind: "captcha" };
@@ -576,11 +586,16 @@ export async function refreshCaptcha(chatId, onCaptcha) {
   await onCaptcha({ image, attempt: session.attempts + 1, note: "Use this new CAPTCHA image." });
 }
 
-export async function cancelTracking(chatId) {
+export async function cancelTracking(chatId, { closeContext = true } = {}) {
   const key = String(chatId);
   const session = sessions.get(key);
   sessions.delete(key);
-  if (session) await session.context.close().catch(() => {});
+  if (session?.page) await session.page.close().catch(() => {});
+  if (closeContext) {
+    const context = userContexts.get(key) || session?.context;
+    userContexts.delete(key);
+    if (context) await context.close().catch(() => {});
+  }
 }
 
 export function getActiveTrackingCount() {
@@ -588,9 +603,12 @@ export function getActiveTrackingCount() {
 }
 
 export async function closeBrowser() {
-  const all = [...sessions.values()];
+  const allContexts = [...new Set(userContexts.values())];
+  const allSessions = [...sessions.values()];
   sessions.clear();
-  await Promise.allSettled(all.map((session) => session.context.close()));
+  userContexts.clear();
+  await Promise.allSettled(allSessions.map((session) => session.page.close()));
+  await Promise.allSettled(allContexts.map((context) => context.close()));
   if (browserPromise) {
     const browser = await browserPromise.catch(() => null);
     await browser?.close().catch(() => {});
