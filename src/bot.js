@@ -49,7 +49,7 @@ export function startBot() {
   });
 
   bot.command("track", async (ctx) => {
-    await cancelTracking(ctx.chat.id);
+    await cancelTracking(ctx.chat.id, { closeContext: false });
     ctx.session.state = "awaiting_consignment";
     ctx.session.consignmentNumber = null;
     await ctx.reply(
@@ -67,7 +67,7 @@ export function startBot() {
 
   bot.callbackQuery("track:start", async (ctx) => {
     await ctx.answerCallbackQuery();
-    await cancelTracking(ctx.chat.id);
+    await cancelTracking(ctx.chat.id, { closeContext: false });
     ctx.session.state = "awaiting_consignment";
     ctx.session.consignmentNumber = null;
     await ctx.reply("📦 Please send your India Post consignment/article number.\n\nFor your privacy, send it only in this chat.");
@@ -218,13 +218,17 @@ export function startBot() {
 
 
 async function replyWithTrackingArtifacts(ctx, result, consignment) {
-  await ctx.reply(result.message, { parse_mode: "HTML", reply_markup: mainKeyboard() });
+  // On success, send only the screenshot of the official result page.
+  // Do not send a PDF or an extra text summary.
   if (result.screenshot?.length) {
     await ctx.replyWithPhoto(new InputFile(result.screenshot, `daksewa-${consignment}-tracking.png`), {
-      caption: "🖼️ Screenshot of the verified India Post tracking result.",
+      caption: "🖼️ India Post tracking result screenshot.",
+      reply_markup: mainKeyboard(),
     });
   } else {
-    await ctx.reply("⚠️ India Post returned a result, but I couldn't capture its screenshot.");
+    await ctx.reply("⚠️ India Post returned a result, but I couldn't capture its screenshot. Please try /track again.", {
+      reply_markup: mainKeyboard(),
+    });
   }
 }
 
