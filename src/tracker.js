@@ -201,9 +201,8 @@ async function findCaptchaInput(page) {
 }
 
 async function readResponse(page) {
-  // The tracking widget is a client-rendered SPA. innerText alone can omit
-  // values displayed inside inputs or content populated through DOM updates,
-  // so read visible text, DOM text, and form values from every frame.
+  // India Post may render result values in nested SPA components while body.innerText
+  // contains only labels. Read visible leaf text, form values, and label neighborhoods.
   const frameBodies = [];
   for (const frame of page.frames()) {
     const frameText = await frame.evaluate(() => {
@@ -213,14 +212,33 @@ async function readResponse(page) {
         return r.width > 0 && r.height > 0 && s.display !== "none" &&
           s.visibility !== "hidden" && Number(s.opacity) !== 0;
       };
-      const visibleValues = [...document.querySelectorAll("input, textarea, [contenteditable='true']")]
-        .filter(visible)
-        .map((el) => el.value ?? el.innerText ?? el.textContent ?? "")
-        .filter(Boolean);
-      const labels = [...document.querySelectorAll("[aria-label], [title]")]
-        .filter(visible)
-        .map((el) => [el.getAttribute("aria-label"), el.getAttribute("title")].filter(Boolean).join(" "));
-      return [document.body?.innerText ?? "", document.body?.textContent ?? "", ...visibleValues, ...labels].join("\n");
+      const nodes = [...document.querySelectorAll("body *")].filter(visible);
+      const values = [];
+      for (const el of document.querySelectorAll("input, textarea, select, [contenteditable='true']")) {
+        if (!visible(el)) continue;
+        const value = el.value ?? el.innerText ?? el.textContent ?? "";
+        if (value) values.push(String(value).trim());
+      }
+      const labels = /^(?:consignment no\.?|consignment number|article number|article type|booked at|booked on|booking date|destination|origin pincode|destination pincode|delivered on|delivery date|current status|article status|tracking status|status)\s*:?$/i;
+      const neighborhoods = [];
+      for (const el of nodes) {
+        const label = (el.innerText || el.textContent || "").replace(/\s+/g, " ").trim();
+        if (!label || label.length > 45 || !labels.test(label)) continue;
+        let parent = el;
+        for (let depth = 0; depth < 4 && parent; depth++, parent = parent.parentElement) {
+          if (!parent || !visible(parent)) continue;
+          const nearby = (parent.innerText || parent.textContent || "").replace(/\s+/g, " ").trim();
+          const nearbyValues = [...parent.querySelectorAll("input, textarea, select")].filter(visible).map((node) => String(node.value || "").trim()).filter(Boolean);
+          if (nearby.length > label.length && nearby.length < 500) {
+            neighborhoods.push(label + " => " + nearby + " " + nearbyValues.join(" "));
+            break;
+          }
+        }
+      }
+      const visibleLeafText = nodes.filter((el) => !el.children.length)
+        .map((el) => (el.innerText || el.textContent || "").replace(/\s+/g, " ").trim())
+        .filter((value) => value && value.length < 300);
+      return [document.body?.innerText ?? "", document.body?.textContent ?? "", ...visibleLeafText, ...values, ...neighborhoods].join("\n");
     }).catch(() => "");
     const normalized = normalizeText(frameText);
     if (normalized) frameBodies.push(normalized);
@@ -233,7 +251,6 @@ async function readResponse(page) {
     expired: /session expired|session timed out|page expired/i.test(body),
   };
 }
-
 function looksLikeTrackingResult(body, consignmentNumber, url = "") {
   const text = normalizeText(body);
   const number = String(consignmentNumber || "").trim();
