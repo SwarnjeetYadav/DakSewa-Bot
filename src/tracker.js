@@ -201,12 +201,29 @@ async function findCaptchaInput(page) {
 }
 
 async function readResponse(page) {
-  // The tracking widget may be rendered inside an iframe. Read all frame
-  // bodies so we do not classify only the outer SPA shell or homepage.
+  // The tracking widget is a client-rendered SPA. innerText alone can omit
+  // values displayed inside inputs or content populated through DOM updates,
+  // so read visible text, DOM text, and form values from every frame.
   const frameBodies = [];
   for (const frame of page.frames()) {
-    const frameBody = normalizeText(await frame.locator("body").innerText().catch(() => ""));
-    if (frameBody) frameBodies.push(frameBody);
+    const frameText = await frame.evaluate(() => {
+      const visible = (el) => {
+        const r = el.getBoundingClientRect();
+        const s = getComputedStyle(el);
+        return r.width > 0 && r.height > 0 && s.display !== "none" &&
+          s.visibility !== "hidden" && Number(s.opacity) !== 0;
+      };
+      const visibleValues = [...document.querySelectorAll("input, textarea, [contenteditable='true']")]
+        .filter(visible)
+        .map((el) => el.value ?? el.innerText ?? el.textContent ?? "")
+        .filter(Boolean);
+      const labels = [...document.querySelectorAll("[aria-label], [title]")]
+        .filter(visible)
+        .map((el) => [el.getAttribute("aria-label"), el.getAttribute("title")].filter(Boolean).join(" "));
+      return [document.body?.innerText ?? "", document.body?.textContent ?? "", ...visibleValues, ...labels].join("\n");
+    }).catch(() => "");
+    const normalized = normalizeText(frameText);
+    if (normalized) frameBodies.push(normalized);
   }
   const body = normalizeText([...new Set(frameBodies)].join("\n"));
   return {
@@ -521,7 +538,7 @@ export async function submitCaptcha(chatId, captchaText, { onCaptcha }) {
   // India Post is a client-rendered SPA; wait for the result route and
   // matching consignment details instead of assuming 1.2 seconds is enough.
   await session.page.waitForLoadState("domcontentloaded", { timeout: 4000 }).catch(() => {});
-  const response = await waitForTrackingResult(session.page, session.consignmentNumber, Math.min(TIMEOUT_MS, 20000));
+  const response = await waitForTrackingResult(session.page, session.consignmentNumber, Math.min(TIMEOUT_MS, 30000));
   if (response.expired) {
     await cancelTracking(chatId);
     return { kind: "expired" };
